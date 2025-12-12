@@ -161,6 +161,31 @@ Vibe supports multiple ways to configure your API keys:
 
 **Note**: The `.env` file is specifically for API keys and other provider credentials. General Vibe configuration should be done in `config.toml`.
 
+### Proxy and SSL configuration
+
+Vibe can route HTTP calls through proxies and customize TLS verification for providers that use HTTPX-based backends.
+
+- `http_proxy`, `https_proxy`, `all_proxy`, `no_proxy`: Configure proxy URLs for specific schemes or for all traffic. These values map directly to the `proxies` argument passed to `httpx.AsyncClient`.
+- `verify_ssl`: Set to `false` to disable TLS certificate validation. When provided, this value sets the `verify` option on `httpx.AsyncClient`.
+- `ca_bundle`: Path to a certificate bundle or directory. When set, Vibe passes the path to the `verify` option on `httpx.AsyncClient` and validates that the file or directory exists.
+
+You can set these keys globally or per provider in `config.toml`. Provider-level values override global settings, which in turn fall back to environment variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`). Examples:
+
+```toml
+# Global defaults
+http_proxy = "http://localhost:3128"
+no_proxy = "localhost,127.0.0.1"
+verify_ssl = true
+ca_bundle = "/etc/ssl/certs/ca-certificates.crt"
+
+[[providers]]
+name = "my-provider"
+api_base = "https://api.example.com/v1"
+api_key_env_var = "MY_PROVIDER_API_KEY"
+http_proxy = "socks5://127.0.0.1:1080"
+verify_ssl = false  # disable verification for this provider only
+```
+
 ### Custom System Prompts
 
 You can create custom system prompts to replace the default one (`prompts/cli.md`). Create a markdown file in the `~/.vibe/prompts/` directory with your custom prompt content.

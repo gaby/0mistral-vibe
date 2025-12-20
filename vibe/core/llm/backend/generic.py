@@ -171,6 +171,7 @@ class GenericBackend:
         client: httpx.AsyncClient | None = None,
         provider: ProviderConfig,
         timeout: float = 720.0,
+        client_options: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the backend.
 
@@ -181,12 +182,14 @@ class GenericBackend:
         self._owns_client = client is None
         self._provider = provider
         self._timeout = timeout
+        self._client_options = client_options or {}
 
     async def __aenter__(self) -> GenericBackend:
         if self._client is None:
             self._client = httpx.AsyncClient(
                 timeout=httpx.Timeout(self._timeout),
                 limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
+                **self._client_options,
             )
         return self
 
@@ -205,6 +208,7 @@ class GenericBackend:
             self._client = httpx.AsyncClient(
                 timeout=httpx.Timeout(self._timeout),
                 limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
+                **self._client_options,
             )
             self._owns_client = True
         return self._client

@@ -131,6 +131,34 @@ class ProviderConfig(BaseModel):
     api_key_env_var: str = ""
     api_style: str = "openai"
     backend: Backend = Backend.GENERIC
+    http_proxy: str | None = None
+    https_proxy: str | None = None
+    all_proxy: str | None = None
+    no_proxy: str | None = None
+    verify_ssl: bool | None = None
+    ca_bundle: Path | None = None
+
+    @field_validator(
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "no_proxy",
+        mode="before",
+    )
+    @classmethod
+    def _blank_proxy_to_none(cls, value: str | None) -> str | None:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("ca_bundle", mode="before")
+    @classmethod
+    def _expand_ca_bundle(cls, value: Any) -> Path | None:
+        if value is None:
+            return None
+        if isinstance(value, (str, Path)):
+            return Path(value).expanduser().resolve()
+        raise TypeError("ca_bundle must be a string path or None")
 
 
 class _MCPBase(BaseModel):
@@ -288,6 +316,12 @@ class VibeConfig(BaseSettings):
     include_prompt_detail: bool = True
     enable_update_checks: bool = True
     api_timeout: float = 720.0
+    http_proxy: str | None = None
+    https_proxy: str | None = None
+    all_proxy: str | None = None
+    no_proxy: str | None = None
+    verify_ssl: bool = True
+    ca_bundle: Path | None = None
     providers: list[ProviderConfig] = Field(
         default_factory=lambda: list(DEFAULT_PROVIDERS)
     )
@@ -434,6 +468,28 @@ class VibeConfig(BaseSettings):
             )
         return v
 
+    @field_validator(
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "no_proxy",
+        mode="before",
+    )
+    @classmethod
+    def _blank_proxy_to_none(cls, value: str | None) -> str | None:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("ca_bundle", mode="before")
+    @classmethod
+    def _expand_ca_bundle(cls, value: Any) -> Path | None:
+        if value is None:
+            return None
+        if isinstance(value, (str, Path)):
+            return Path(value).expanduser().resolve()
+        raise TypeError("ca_bundle must be a string path or None")
+
     @field_validator("tools", mode="before")
     @classmethod
     def _normalize_tool_configs(cls, v: Any) -> dict[str, BaseToolConfig]:
@@ -466,6 +522,95 @@ class VibeConfig(BaseSettings):
     def _check_system_prompt(self) -> VibeConfig:
         _ = self.system_prompt
         return self
+
+    @staticmethod
+    def _env_value(*names: str) -> str | None:
+        for name in names:
+            if value := os.getenv(name):
+                return value
+            if value := os.getenv(name.lower()):
+                return value
+        return None
+
+    @staticmethod
+    def _ensure_path_exists(path: Path) -> Path:
+        if not path.exists():
+            raise ValueError(f"CA bundle path does not exist: {path}")
+        return path
+
+    def _resolve_ca_bundle(self, provider: ProviderConfig | None) -> Path | None:
+        candidates: list[str | Path | None] = [
+            provider.ca_bundle if provider else None,
+            self.ca_bundle,
+            self._env_value("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"),
+        ]
+
+        for candidate in candidates:
+            if candidate is None:
+                continue
+            path = candidate if isinstance(candidate, Path) else Path(candidate)
+            normalized = self._ensure_path_exists(path.expanduser().resolve())
+            return normalized
+        return None
+
+    def _resolve_proxies(self, provider: ProviderConfig | None) -> dict[str, str] | None:
+        def first_value(*candidates: str | None) -> str | None:
+            for candidate in candidates:
+                if candidate:
+                    return candidate
+            return None
+
+        proxies: dict[str, str] = {}
+
+        http_proxy = first_value(
+            provider.http_proxy if provider else None,
+            self.http_proxy,
+            self._env_value("HTTP_PROXY"),
+        )
+        https_proxy = first_value(
+            provider.https_proxy if provider else None,
+            self.https_proxy,
+            self._env_value("HTTPS_PROXY"),
+        )
+        all_proxy = first_value(
+            provider.all_proxy if provider else None,
+            self.all_proxy,
+            self._env_value("ALL_PROXY"),
+        )
+        no_proxy = first_value(
+            provider.no_proxy if provider else None,
+            self.no_proxy,
+            self._env_value("NO_PROXY"),
+        )
+
+        if http_proxy:
+            proxies["http"] = http_proxy
+        if https_proxy:
+            proxies["https"] = https_proxy
+        if all_proxy:
+            proxies["all"] = all_proxy
+        if no_proxy:
+            proxies["no_proxy"] = no_proxy
+
+        return proxies or None
+
+    def _resolve_verify(self, provider: ProviderConfig | None) -> bool | str:
+        if ca_bundle := self._resolve_ca_bundle(provider):
+            return str(ca_bundle)
+
+        if provider and provider.verify_ssl is not None:
+            return provider.verify_ssl
+        return self.verify_ssl
+
+    def http_client_options(self, provider: ProviderConfig | None) -> dict[str, Any]:
+        options: dict[str, Any] = {}
+
+        if proxies := self._resolve_proxies(provider):
+            options["proxies"] = proxies
+
+        options["verify"] = self._resolve_verify(provider)
+
+        return options
 
     @classmethod
     def save_updates(cls, updates: dict[str, Any]) -> None:
